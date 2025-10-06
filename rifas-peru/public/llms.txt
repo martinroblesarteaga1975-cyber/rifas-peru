@@ -1,0 +1,6 @@
+## Pages
+- [- RifaPeru](/raffledetail): No description available
+- [Admin Login - RifaPeru](/adminlogin): Panel de administración de RifaPeru
+- [Iniciar Sesión - RifaPeru](/login): Inicia sesión en RifaPeru para participar en rifas online
+- [Registrarse - RifaPeru](/register): Crea tu cuenta en RifaPeru y participa en rifas online
+- [RifaPeru - Sistema de Rifas Online](/home): Participa en rifas online y gana increíbles premios. Sistema seguro y confiable de rifas en Perú.
