@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 
 const RaffleContext = createContext(null);
 
@@ -40,47 +41,112 @@ export const RaffleProvider = ({ children }) => {
   const [raffles, setRaffles] = useState([]);
   const [userTickets, setUserTickets] = useState([]);
   const [sellers, setSellers] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Cargar rifas
-    const storedRaffles = localStorage.getItem('raffles');
-    if (storedRaffles) {
-      setRaffles(JSON.parse(storedRaffles));
-    } else {
-      setRaffles(initialRaffles);
-      localStorage.setItem('raffles', JSON.stringify(initialRaffles));
-    }
-
-    // Cargar tickets
-    const storedTickets = localStorage.getItem('userTickets');
-    if (storedTickets) {
-      setUserTickets(JSON.parse(storedTickets));
-    }
-
-    // Cargar vendedores
-    const storedSellers = localStorage.getItem('sellers');
-    if (storedSellers) {
-      setSellers(JSON.parse(storedSellers));
-    }
+    initializeData();
   }, []);
 
+  const initializeData = async () => {
+    try {
+      setLoading(true);
+      
+      // Cargar rifas
+      const { data: rafflesData, error: rafflesError } = await supabase
+        .from('raffles')
+        .select('*');
+      
+      if (rafflesError) throw rafflesError;
+      
+      if (rafflesData.length === 0) {
+        // Insertar rifas iniciales
+        for (const raffle of initialRaffles) {
+          const { data: newRaffle } = await supabase
+            .from('raffles')
+            .insert({
+              id: raffle.id,
+              title: raffle.title,
+              ticket_price: raffle.ticketPrice,
+              total_tickets: raffle.totalTickets,
+              sold_tickets: raffle.soldTickets,
+              draw_date: raffle.drawDate,
+              image: raffle.image,
+              status: raffle.status,
+              available_numbers: raffle.availableNumbers
+            })
+            .select()
+            .single();
+          
+          // Insertar premios
+          for (const prize of raffle.prizes) {
+            await supabase
+              .from('prizes')
+              .insert({
+                id: prize.id,
+                raffle_id: raffle.id,
+                name: prize.name,
+                position: prize.position
+              });
+          }
+        }
+        
+        // Recargar rifas
+        const { data: reloadedRaffles } = await supabase
+          .from('raffles')
+          .select('*');
+        setRaffles(reloadedRaffles || []);
+      } else {
+        setRaffles(rafflesData);
+      }
+
+      // Cargar tickets
+      const { data: ticketsData } = await supabase
+        .from('tickets')
+        .select('*');
+      setUserTickets(ticketsData || []);
+
+      // Cargar vendedores
+      const { data: sellersData } = await supabase
+        .from('sellers')
+        .select('*');
+      setSellers(sellersData || []);
+
+    } catch (error) {
+      console.error('Error initializing data:', error);
+      // Fallback a localStorage si hay error
+      const storedRaffles = localStorage.getItem('raffles');
+      if (storedRaffles) {
+        setRaffles(JSON.parse(storedRaffles));
+      } else {
+        setRaffles(initialRaffles);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Función para generar código de vendedor
-  const generateSellerCode = (userId, name, email) => {
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const newSeller = {
-      id: code,
-      userId,
-      name,
-      email,
-      createdAt: new Date().toISOString(),
-      ticketsSold: 0
-    };
-    
-    const updatedSellers = [...sellers, newSeller];
-    setSellers(updatedSellers);
-    localStorage.setItem('sellers', JSON.stringify(updatedSellers));
-    
-    return code;
+  const generateSellerCode = async (userId, name, email) => {
+    try {
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      
+      const { data: newSeller } = await supabase
+        .from('sellers')
+        .insert({
+          id: code,
+          user_id: userId,
+          name,
+          email
+        })
+        .select()
+        .single();
+      
+      setSellers(prev => [...prev, newSeller]);
+      return code;
+    } catch (error) {
+      console.error('Error generating seller code:', error);
+      return null;
+    }
   };
 
   // Función para validar código de vendedor
@@ -90,11 +156,11 @@ export const RaffleProvider = ({ children }) => {
 
   // Función para obtener estadísticas del vendedor
   const getSellerStats = (sellerCode) => {
-    const sellerTickets = userTickets.filter(ticket => ticket.sellerCode === sellerCode);
-    const uniqueBuyers = [...new Set(sellerTickets.map(ticket => ticket.userEmail))];
+    const sellerTickets = userTickets.filter(ticket => ticket.seller_code === sellerCode);
+    const uniqueBuyers = [...new Set(sellerTickets.map(ticket => ticket.user_email))];
     const totalSales = sellerTickets.reduce((sum, ticket) => {
-      const raffle = raffles.find(r => r.id === ticket.raffleId);
-      return sum + (raffle ? raffle.ticketPrice : 0);
+      const raffle = raffles.find(r => r.id === ticket.raffle_id);
+      return sum + (raffle ? raffle.ticket_price : 0);
     }, 0);
 
     return {
@@ -106,92 +172,147 @@ export const RaffleProvider = ({ children }) => {
 
   // Función para obtener vendedor por userId
   const getSellerByUserId = (userId) => {
-    return sellers.find(seller => seller.userId === userId);
+    return sellers.find(seller => seller.user_id === userId);
   };
 
-  const createRaffle = (raffleData) => {
-    const newRaffle = {
-      ...raffleData,
-      id: Date.now().toString(),
-      soldTickets: 0,
-      availableNumbers: Array.from({ length: raffleData.totalTickets }, (_, i) => i + 1),
-      status: 'active'
-    };
-    const updatedRaffles = [...raffles, newRaffle];
-    setRaffles(updatedRaffles);
-    localStorage.setItem('raffles', JSON.stringify(updatedRaffles));
-    return newRaffle;
+  const createRaffle = async (raffleData) => {
+    try {
+      const { data: newRaffle } = await supabase
+        .from('raffles')
+        .insert({
+          id: Date.now().toString(),
+          title: raffleData.title,
+          ticket_price: raffleData.ticketPrice,
+          total_tickets: raffleData.totalTickets,
+          sold_tickets: 0,
+          draw_date: raffleData.drawDate,
+          image: raffleData.image,
+          status: 'active',
+          available_numbers: Array.from({ length: raffleData.totalTickets }, (_, i) => i + 1)
+        })
+        .select()
+        .single();
+
+      setRaffles(prev => [...prev, newRaffle]);
+      return newRaffle;
+    } catch (error) {
+      console.error('Error creating raffle:', error);
+      return null;
+    }
   };
 
-  const updateRaffle = (id, raffleData) => {
-    const updatedRaffles = raffles.map(raffle =>
-      raffle.id === id ? { ...raffle, ...raffleData } : raffle
-    );
-    setRaffles(updatedRaffles);
-    localStorage.setItem('raffles', JSON.stringify(updatedRaffles));
+  const updateRaffle = async (id, raffleData) => {
+    try {
+      const { data: updatedRaffle } = await supabase
+        .from('raffles')
+        .update({
+          title: raffleData.title,
+          ticket_price: raffleData.ticketPrice,
+          total_tickets: raffleData.totalTickets,
+          draw_date: raffleData.drawDate,
+          image: raffleData.image,
+          status: raffleData.status
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      setRaffles(prev => prev.map(r => r.id === id ? updatedRaffle : r));
+      return updatedRaffle;
+    } catch (error) {
+      console.error('Error updating raffle:', error);
+      return null;
+    }
   };
 
-  const deleteRaffle = (id) => {
-    const updatedRaffles = raffles.filter(raffle => raffle.id !== id);
-    setRaffles(updatedRaffles);
-    localStorage.setItem('raffles', JSON.stringify(updatedRaffles));
+  const deleteRaffle = async (id) => {
+    try {
+      await supabase
+        .from('raffles')
+        .delete()
+        .eq('id', id);
+
+      setRaffles(prev => prev.filter(r => r.id !== id));
+    } catch (error) {
+      console.error('Error deleting raffle:', error);
+    }
   };
 
   // Modificada para incluir código de vendedor
-  const purchaseTicket = (raffleId, numbers, userEmail, sellerCode = null) => {
-    const raffle = raffles.find(r => r.id === raffleId);
-    if (!raffle) return { success: false, message: 'Rifa no encontrada' };
-
-    // Validar código de vendedor si se proporciona
-    if (sellerCode && !validateSellerCode(sellerCode)) {
-      return { success: false, message: 'Código de vendedor inválido' };
-    }
-
-    const unavailableNumbers = numbers.filter(num => !raffle.availableNumbers.includes(num));
-    if (unavailableNumbers.length > 0) {
-      return { success: false, message: 'Algunos números ya no están disponibles' };
-    }
-
-    const updatedRaffles = raffles.map(r => {
-      if (r.id === raffleId) {
-        return {
-          ...r,
-          soldTickets: r.soldTickets + numbers.length,
-          availableNumbers: r.availableNumbers.filter(num => !numbers.includes(num))
-        };
+  const purchaseTicket = async (raffleId, numbers, userEmail, sellerCode = null) => {
+    try {
+      // Validar código de vendedor si se proporciona
+      if (sellerCode && !validateSellerCode(sellerCode)) {
+        return { success: false, message: 'Código de vendedor inválido' };
       }
-      return r;
-    });
 
-    const newTickets = numbers.map(num => ({
-      id: Date.now().toString() + num,
-      raffleId,
-      raffleTitle: raffle.title,
-      number: num,
-      userEmail,
-      sellerCode, // Agregamos el código del vendedor
-      purchaseDate: new Date().toISOString(),
-      status: 'active'
-    }));
+      // Obtener raffle actual
+      const { data: raffle } = await supabase
+        .from('raffles')
+        .select('*')
+        .eq('id', raffleId)
+        .single();
 
-    const updatedUserTickets = [...userTickets, ...newTickets];
+      if (!raffle) {
+        return { success: false, message: 'Rifa no encontrada' };
+      }
 
-    setRaffles(updatedRaffles);
-    setUserTickets(updatedUserTickets);
-    localStorage.setItem('raffles', JSON.stringify(updatedRaffles));
-    localStorage.setItem('userTickets', JSON.stringify(updatedUserTickets));
+      // Validar números disponibles
+      const unavailableNumbers = numbers.filter(num => !raffle.available_numbers.includes(num));
+      if (unavailableNumbers.length > 0) {
+        return { success: false, message: 'Algunos números ya no están disponibles' };
+      }
 
-    return { success: true, tickets: newTickets };
+      // Actualizar raffle
+      const newAvailableNumbers = raffle.available_numbers.filter(num => !numbers.includes(num));
+      await supabase
+        .from('raffles')
+        .update({
+          sold_tickets: raffle.sold_tickets + numbers.length,
+          available_numbers: newAvailableNumbers
+        })
+        .eq('id', raffleId);
+
+      // Crear tickets
+      const newTickets = numbers.map(num => ({
+        id: Date.now().toString() + num,
+        raffle_id: raffleId,
+        raffle_title: raffle.title,
+        number: num,
+        user_email: userEmail,
+        seller_code: sellerCode,
+        status: 'active'
+      }));
+
+      const { data: createdTickets } = await supabase
+        .from('tickets')
+        .insert(newTickets)
+        .select();
+
+      // Actualizar estado local
+      setRaffles(prev => prev.map(r => 
+        r.id === raffleId 
+          ? { ...r, sold_tickets: r.sold_tickets + numbers.length, available_numbers: newAvailableNumbers }
+          : r
+      ));
+      
+      setUserTickets(prev => [...prev, ...createdTickets]);
+
+      return { success: true, tickets: createdTickets };
+    } catch (error) {
+      console.error('Error purchasing ticket:', error);
+      return { success: false, message: 'Error al procesar la compra' };
+    }
   };
 
   const getUserTickets = (userEmail) => {
-    return userTickets.filter(ticket => ticket.userEmail === userEmail);
+    return userTickets.filter(ticket => ticket.user_email === userEmail);
   };
 
   const getStats = () => {
     const activeRaffles = raffles.filter(r => r.status === 'active').length;
-    const totalTicketsSold = raffles.reduce((sum, r) => sum + r.soldTickets, 0);
-    const totalRevenue = raffles.reduce((sum, r) => sum + (r.soldTickets * r.ticketPrice), 0);
+    const totalTicketsSold = raffles.reduce((sum, r) => sum + r.sold_tickets, 0);
+    const totalRevenue = raffles.reduce((sum, r) => sum + (r.sold_tickets * r.ticket_price), 0);
 
     return {
       activeRaffles,
@@ -206,6 +327,7 @@ export const RaffleProvider = ({ children }) => {
         raffles,
         userTickets,
         sellers,
+        loading,
         createRaffle,
         updateRaffle,
         deleteRaffle,
