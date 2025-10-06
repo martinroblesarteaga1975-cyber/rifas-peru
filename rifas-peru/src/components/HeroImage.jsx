@@ -2,10 +2,11 @@ import React from 'react';
 
 const HeroImage = () => {
   return (
-    <div className='flex justify-center items-center'>
+    <div className='flex justify-center items-center w-full'>
       <img 
-        src='https://imagedelivery.net/LqiWLm-3MGbYHtFuUbcBtA/119580eb-abd9-4191-b93a-f01938786700/public' 
-        alt='Hostinger Horizons' 
+        src='/banner_rifasencico.jpg' 
+        alt='Rifas Encico - Gana premios increíbles' 
+        className='w-full max-w-6xl h-auto rounded-lg shadow-xl'
       />
     </div>
   );
